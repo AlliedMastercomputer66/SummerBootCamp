@@ -43,10 +43,7 @@
        
   <canvas id="gameCanvas" width="640" height="640" style="background:black; display:block; margin:auto;"></canvas>
 </div>
-      <!--This is content card 3-->
-      <div class="card">
-      </div>
-    </div>
+      
   </main>
 
   <footer>
@@ -75,37 +72,41 @@
   const canvas = document.getElementById('gameCanvas');
   const ctx = canvas.getContext('2d');
 
-  const tileSize = 32;
-  const rows = 21;
-  const cols = 21;
+  const tileSize = 20;
+  const rows = 31;
+  const cols = 60; // wider maze for scrolling
 
   let maze = [];
+  const lightRadius = 5;
+
+  // Viewport in tiles (width and height)
+  const viewWidth = 31; // show 31 tiles horizontally (same as before)
+  const viewHeight = 31; // vertical fixed
+
+  let viewportX = 0; // top-left tile x shown on canvas
 
   function generateMaze() {
     maze = Array.from({ length: rows }, () => Array(cols).fill('#'));
 
     function carve(x, y) {
-      const directions = [
-        [0, -2], [2, 0], [0, 2], [-2, 0]
-      ].sort(() => Math.random() - 0.5);
-
+      const directions = [[0, -2],[2, 0],[0, 2],[-2, 0]].sort(() => Math.random() - 0.5);
       for (let [dx, dy] of directions) {
-        const nx = x + dx;
-        const ny = y + dy;
+        const nx = x + dx, ny = y + dy;
         if (nx > 0 && nx < cols - 1 && ny > 0 && ny < rows - 1 && maze[ny][nx] === '#') {
-          maze[ny - dy / 2][nx - dx / 2] = ' ';
+          maze[ny - dy/2][nx - dx/2] = ' ';
           maze[ny][nx] = ' ';
           carve(nx, ny);
         }
       }
     }
 
+    // Carve maze from left side near (1,1)
     maze[1][1] = ' ';
     carve(1, 1);
 
-    const exits = [[cols - 2, rows - 2], [1, rows - 2], [cols - 2, 1]];
-    const [ex, ey] = exits[Math.floor(Math.random() * exits.length)];
-    maze[ey][ex] = 'E';
+    // Place locked exit somewhere on right side near bottom-right
+    maze[rows - 2][cols - 2] = 'E';
+
     return maze;
   }
 
@@ -113,13 +114,14 @@
     const positions = [];
     for (let y = 1; y < rows - 1; y++) {
       for (let x = 1; x < cols - 1; x++) {
-        if (maze[y][x] === ' ' && (x !== player.gridX || y !== player.gridY)) {
-          positions.push({ x, y });
-        }
+        if (maze[y][x] === ' ' && (x !== player.gridX || y !== player.gridY)) positions.push({ x, y });
       }
     }
     return positions.sort(() => Math.random() - 0.5).slice(0, count);
   }
+
+  // Keys array
+  let keys = [];
 
   let gameState = 'title';
 
@@ -133,22 +135,30 @@
     speed: 4,
     moving: false,
     lives: 3,
-    facing: 'right' // for attack direction
+    facing: 'right',
+    ammo: 3,
+    hasGun: true,
+    keysCollected: 0,
   };
 
   let monsters = [];
   let monsterTimer = 0;
 
-  // Sword swipe animation state
   let attackActive = false;
   let attackFrame = 0;
   const attackDuration = 6;
 
-  // Particle effects on monster death
+  let gunShotActive = false;
+  let gunShotFrame = 0;
+  const gunShotDuration = 5;
+
   const particles = [];
+
+  let ammoPacks = [];
 
   function initGame() {
     maze = generateMaze();
+
     player.gridX = 1;
     player.gridY = 1;
     player.x = player.gridX * tileSize;
@@ -156,122 +166,164 @@
     player.targetX = player.x;
     player.targetY = player.y;
     player.lives = 3;
+    player.ammo = 3;
     player.moving = false;
-    monsters = getEmptyPositions(3);
+    player.facing = 'right';
+    player.keysCollected = 0;
+
+    monsters = getEmptyPositions(8).map(pos => ({ x: pos.x, y: pos.y }));
+    ammoPacks = getEmptyPositions(5).map(pos => ({ x: pos.x, y: pos.y }));
+
+    keys = getEmptyPositions(2);
+
     attackActive = false;
     attackFrame = 0;
+    gunShotActive = false;
+    gunShotFrame = 0;
+
     particles.length = 0;
     gameState = 'playing';
+
+    viewportX = 0;
   }
 
-  function drawTitle() {
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "white";
-    ctx.font = "40px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText("Trapped", canvas.width / 2, canvas.height / 2 - 80);
-
-    ctx.font = "20px Arial";
-    ctx.fillText("Press ENTER to Start", canvas.width / 2, canvas.height / 2 - 30);
-
-    ctx.font = "16px Arial";
-    ctx.fillText("Move: W A S D | Attack: L", canvas.width / 2, canvas.height / 2 + 10);
-  }
-
-  function drawEnd(text) {
-    ctx.fillStyle = "black";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "white";
-    ctx.font = "30px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText(text, canvas.width / 2, canvas.height / 2 - 20);
-    drawRestartButton();
-  }
-
-  function drawRestartButton() {
-    const buttonWidth = 140;
-    const buttonHeight = 40;
-    const x = canvas.width / 2 - buttonWidth / 2;
-    const y = canvas.height / 2 + 20;
-
-    ctx.fillStyle = "#444";
-    ctx.fillRect(x, y, buttonWidth, buttonHeight);
-    ctx.strokeStyle = "#fff";
-    ctx.strokeRect(x, y, buttonWidth, buttonHeight);
-
-    ctx.fillStyle = "#fff";
-    ctx.font = "20px Arial";
-    ctx.textAlign = "center";
-    ctx.fillText("Restart", canvas.width / 2, y + 27);
-
-    canvas.addEventListener("click", onCanvasClick);
-  }
-
-  function onCanvasClick(e) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-
-    const x = canvas.width / 2 - 70;
-    const y = canvas.height / 2 + 20;
-    const w = 140;
-    const h = 40;
-
-    if (mx >= x && mx <= x + w && my >= y && my <= y + h) {
-      canvas.removeEventListener("click", onCanvasClick);
-      initGame();
-    }
-  }
+  // --- DRAW FUNCTIONS ---
 
   function drawMaze() {
     for (let y = 0; y < rows; y++) {
-      for (let x = 0; x < cols; x++) {
-        let dx = x - player.gridX;
-        let dy = y - player.gridY;
-        if (dx * dx + dy * dy < 16) {
-          if (maze[y][x] === '#') {
-            ctx.fillStyle = 'gray';
-            ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
-          } else if (maze[y][x] === 'E') {
-            ctx.fillStyle = 'green';
-            ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
-          } else {
-            ctx.fillStyle = 'black';
-            ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
-          }
+      for (let x = viewportX; x < viewportX + viewWidth; x++) {
+        if (x >= cols) continue;
+        const dist = Math.abs(x - player.gridX) + Math.abs(y - player.gridY);
+        const screenX = (x - viewportX) * tileSize;
+        const screenY = y * tileSize;
+
+        if (dist > lightRadius) {
+          // Dark overlay outside light radius
+          ctx.fillStyle = 'rgba(0,0,0,0.9)';
+          ctx.fillRect(screenX, screenY, tileSize, tileSize);
+          continue;
+        }
+
+        if (maze[y][x] === '#') {
+          ctx.fillStyle = 'gray';
+          ctx.fillRect(screenX, screenY, tileSize, tileSize);
+        } else if (maze[y][x] === 'E') {
+          // Locked exit red if keys missing, green if unlocked
+          ctx.fillStyle = player.keysCollected >= keys.length ? 'green' : 'red';
+          ctx.fillRect(screenX, screenY, tileSize, tileSize);
         } else {
           ctx.fillStyle = 'black';
-          ctx.fillRect(x * tileSize, y * tileSize, tileSize, tileSize);
+          ctx.fillRect(screenX, screenY, tileSize, tileSize);
         }
       }
     }
   }
 
+  function drawAmmoPacks() {
+    for (let pack of ammoPacks) {
+      const dist = Math.abs(pack.x - player.gridX) + Math.abs(pack.y - player.gridY);
+      if (dist > lightRadius) continue;
+
+      if (pack.x < viewportX || pack.x >= viewportX + viewWidth) continue;
+
+      const px = (pack.x - viewportX) * tileSize + tileSize / 2;
+      const py = pack.y * tileSize + tileSize / 2;
+
+      ctx.shadowColor = 'cyan';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = 'cyan';
+      ctx.beginPath();
+      ctx.arc(px, py, tileSize / 4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(px - 5, py);
+      ctx.lineTo(px + 5, py);
+      ctx.moveTo(px, py - 5);
+      ctx.lineTo(px, py + 5);
+      ctx.stroke();
+    }
+  }
+
+  function drawKeys() {
+    for (let key of keys) {
+      const dist = Math.abs(key.x - player.gridX) + Math.abs(key.y - player.gridY);
+      if (dist > lightRadius) continue;
+
+      if (key.x < viewportX || key.x >= viewportX + viewWidth) continue;
+
+      const px = (key.x - viewportX) * tileSize + tileSize / 2;
+      const py = key.y * tileSize + tileSize / 2;
+
+      // Yellow key glowing
+      ctx.shadowColor = 'yellow';
+      ctx.shadowBlur = 10;
+      ctx.fillStyle = 'gold';
+      ctx.beginPath();
+      ctx.moveTo(px - 5, py);
+      ctx.lineTo(px + 5, py);
+      ctx.lineTo(px, py + 10);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = 'orange';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+  }
+
   function drawPlayer() {
+    const screenX = (player.x / tileSize - viewportX) * tileSize;
+    const screenY = player.y;
+
     ctx.fillStyle = "yellow";
     ctx.beginPath();
-    ctx.arc(player.x + tileSize / 2, player.y + tileSize / 2, tileSize / 2.5, 0, Math.PI * 2);
+    ctx.arc(screenX + tileSize / 2, screenY + tileSize / 2, tileSize / 2.5, 0, Math.PI * 2);
     ctx.fill();
+
+    if (player.hasGun) {
+      ctx.fillStyle = 'black';
+      let centerX = screenX + tileSize / 2;
+      let centerY = screenY + tileSize / 2;
+      switch (player.facing) {
+        case 'right':
+          ctx.fillRect(centerX + 10, centerY - 4, 10, 8);
+          break;
+        case 'left':
+          ctx.fillRect(centerX - 20, centerY - 4, 10, 8);
+          break;
+        case 'up':
+          ctx.fillRect(centerX - 4, centerY - 20, 8, 10);
+          break;
+        case 'down':
+          ctx.fillRect(centerX - 4, centerY + 10, 8, 10);
+          break;
+      }
+    }
   }
 
   function drawAttack() {
     if (!attackActive) return;
 
+    const screenX = (player.x / tileSize - viewportX) * tileSize;
+    const screenY = player.y;
+
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
 
-    const centerX = player.x + tileSize / 2;
-    const centerY = player.y + tileSize / 2;
+    const centerX = screenX + tileSize / 2;
+    const centerY = screenY + tileSize / 2;
     const progress = attackFrame / attackDuration;
 
     ctx.beginPath();
 
-    // Simple swipe arcs depending on facing direction
     switch (player.facing) {
       case 'right':
-        // Swipe from top-left to bottom-right
         ctx.moveTo(centerX + 5, centerY - 15 + 30 * progress);
         ctx.lineTo(centerX + 25, centerY + 15 - 30 * progress);
         break;
@@ -292,189 +344,363 @@
     ctx.stroke();
   }
 
+  function drawGunShot() {
+    if (!gunShotActive) return;
+
+    const screenX = (player.x / tileSize - viewportX) * tileSize;
+    const screenY = player.y;
+
+    const centerX = screenX + tileSize / 2;
+    const centerY = screenY + tileSize / 2;
+    const progress = gunShotFrame / gunShotDuration;
+
+    ctx.strokeStyle = `rgba(255, 255, 0, ${1 - progress})`;
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+
+    ctx.beginPath();
+
+    let endX = centerX;
+    let endY = centerY;
+
+    const range = 8 * tileSize;
+
+    switch (player.facing) {
+      case 'right':
+        endX += range * (1 - progress);
+        break;
+      case 'left':
+        endX -= range * (1 - progress);
+        break;
+      case 'up':
+        endY -= range * (1 - progress);
+        break;
+      case 'down':
+        endY += range * (1 - progress);
+        break;
+    }
+
+    ctx.moveTo(centerX, centerY);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+  }
+
   function drawMonsters() {
-    ctx.fillStyle = "red";
     for (let m of monsters) {
-      let dx = m.x - player.gridX;
-      let dy = m.y - player.gridY;
-      if (dx * dx + dy * dy < 16) {
-        ctx.fillRect(m.x * tileSize + 8, m.y * tileSize + 8, 16, 16);
+      const dist = Math.abs(m.x - player.gridX) + Math.abs(m.y - player.gridY);
+      if (dist > lightRadius) continue;
+
+      if (m.x < viewportX || m.x >= viewportX + viewWidth) continue;
+
+      const px = (m.x - viewportX) * tileSize + tileSize / 2;
+      const py = m.y * tileSize + tileSize / 2;
+
+      ctx.fillStyle = 'red';
+      ctx.beginPath();
+      ctx.arc(px, py, tileSize / 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawLivesAndAmmo() {
+    ctx.fillStyle = 'white';
+    ctx.font = '16px Arial';
+    ctx.textAlign = 'left';
+    ctx.fillText(`Lives: ${player.lives}`, 10, 20);
+    ctx.fillText(`Ammo: ${player.ammo}`, 10, 40);
+    ctx.fillText(`Keys: ${player.keysCollected} / ${keys.length}`, 10, 60);
+  }
+
+  function requestMove(dx, dy) {
+    if (player.moving) return;
+
+    const newX = player.gridX + dx;
+    const newY = player.gridY + dy;
+
+    if (!canMove(newX, newY)) return;
+
+    player.gridX = newX;
+    player.gridY = newY;
+    player.targetX = newX * tileSize;
+    player.targetY = newY * tileSize;
+    player.moving = true;
+
+    // Update facing direction if movement
+    if (dx === 1) player.facing = 'right';
+    else if (dx === -1) player.facing = 'left';
+    else if (dy === 1) player.facing = 'down';
+    else if (dy === -1) player.facing = 'up';
+
+    // Collect ammo pack if on same spot
+    for (let i = ammoPacks.length - 1; i >= 0; i--) {
+      const pack = ammoPacks[i];
+      if (pack.x === newX && pack.y === newY) {
+        player.ammo = Math.min(15, player.ammo + 5);
+        ammoPacks.splice(i, 1);
+      }
+    }
+
+    // Collect key if on same spot
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const key = keys[i];
+      if (key.x === newX && key.y === newY) {
+        player.keysCollected++;
+        keys.splice(i, 1);
+      }
+    }
+
+    // Check if stepped on exit and have keys
+    if (maze[newY][newX] === 'E') {
+      if (player.keysCollected >= 2) {
+        gameState = 'won';
+      } else {
+        // Maybe play locked sound or message here
       }
     }
   }
 
   function canMove(x, y) {
-    return maze[y] && maze[y][x] !== '#';
+    if (x < 0 || x >= cols || y < 0 || y >= rows) return false;
+    if (maze[y][x] === '#') return false;
+    return true;
   }
 
-  function requestMove(dx, dy) {
-    if (player.moving || attackActive) return;
+  function updatePlayer() {
+    if (!player.moving) return;
+    if (player.x < player.targetX) player.x = Math.min(player.x + player.speed, player.targetX);
+    if (player.x > player.targetX) player.x = Math.max(player.x - player.speed, player.targetX);
+    if (player.y < player.targetY) player.y = Math.min(player.y + player.speed, player.targetY);
+    if (player.y > player.targetY) player.y = Math.max(player.y - player.speed, player.targetY);
+    if (player.x === player.targetX && player.y === player.targetY) {
+      player.moving = false;
+      // Update viewportX to center player horizontally if possible
+      viewportX = player.gridX - Math.floor(viewWidth / 2);
+      if (viewportX < 0) viewportX = 0;
+      if (viewportX > cols - viewWidth) viewportX = cols - viewWidth;
+    }
+  }
 
-    const newX = player.gridX + dx;
-    const newY = player.gridY + dy;
+  // Sword attack function remains same (adjust if needed)
+  function swordAttack() {
+    if (attackActive || gunShotActive) return;
 
-    if (canMove(newX, newY)) {
-      player.gridX = newX;
-      player.gridY = newY;
-      player.targetX = newX * tileSize;
-      player.targetY = newY * tileSize;
-      player.moving = true;
+    let hitX = player.gridX;
+    let hitY = player.gridY;
 
-      // Update facing based on movement
-      if (dx === 1) player.facing = 'right';
-      else if (dx === -1) player.facing = 'left';
-      else if (dy === 1) player.facing = 'down';
-      else if (dy === -1) player.facing = 'up';
+    switch (player.facing) {
+      case 'right': hitX += 1; break;
+      case 'left': hitX -= 1; break;
+      case 'up': hitY -= 1; break;
+      case 'down': hitY += 1; break;
+    }
 
-      if (maze[newY][newX] === 'E') {
-        gameState = 'won';
+    for (let i = monsters.length - 1; i >= 0; i--) {
+      let m = monsters[i];
+      if (m.x === hitX && m.y === hitY) {
+        monsters.splice(i, 1);
+        for(let j=0; j<8; j++) {
+          particles.push({
+            x: m.x * tileSize + tileSize/2,
+            y: m.y * tileSize + tileSize/2,
+            vx: (Math.random()-0.5)*2,
+            vy: (Math.random()-0.5)*2,
+            alpha: 1,
+            size: 2 + Math.random()*2,
+          });
+        }
       }
     }
-  }
-
-  function spawnParticles(x, y) {
-    for (let i = 0; i < 15; i++) {
-      particles.push({
-        x: x * tileSize + tileSize / 2,
-        y: y * tileSize + tileSize / 2,
-        vx: (Math.random() - 0.5) * 3,
-        vy: (Math.random() - 0.5) * 3,
-        alpha: 1,
-        size: Math.random() * 3 + 2,
-      });
-    }
-  }
-
-  function attack() {
-    if (attackActive || player.moving) return;
 
     attackActive = true;
     attackFrame = 0;
-
-    // Check monsters in adjacent tiles
-    for (let i = monsters.length - 1; i >= 0; i--) {
-      let m = monsters[i];
-      if (Math.abs(m.x - player.gridX) <= 1 && Math.abs(m.y - player.gridY) <= 1) {
-        spawnParticles(m.x, m.y);
-        monsters.splice(i, 1);
-      }
-    }
   }
 
-  function moveMonsters() {
-    for (let m of monsters) {
-      let dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
-      let [dx, dy] = dirs[Math.floor(Math.random() * dirs.length)];
-      let newX = m.x + dx;
-      let newY = m.y + dy;
-      if (canMove(newX, newY)) {
-        m.x = newX;
-        m.y = newY;
+  function gunAttack() {
+    if (gunShotActive || attackActive) return;
+    if (player.ammo <= 0) return;
+
+    player.ammo--;
+
+    let hitMonsters = [];
+    const maxRange = 8;
+
+    for (let i = 1; i <= maxRange; i++) {
+      let tx = player.gridX;
+      let ty = player.gridY;
+
+      switch (player.facing) {
+        case 'right': tx += i; break;
+        case 'left': tx -= i; break;
+        case 'up': ty -= i; break;
+        case 'down': ty += i; break;
       }
 
-      if (m.x === player.gridX && m.y === player.gridY) {
+      if (!maze[ty] || maze[ty][tx] === '#' ) break;
+
+      for (let j = monsters.length - 1; j >= 0; j--) {
+        if (monsters[j].x === tx && monsters[j].y === ty) {
+          hitMonsters.push(j);
+        }
+      }
+    }
+
+    for (let index of hitMonsters.reverse()) {
+      const m = monsters[index];
+      monsters.splice(index, 1);
+      for(let j=0; j<8; j++) {
+        particles.push({
+          x: m.x * tileSize + tileSize/2,
+          y: m.y * tileSize + tileSize/2,
+          vx: (Math.random()-0.5)*2,
+          vy: (Math.random()-0.5)*2,
+          alpha: 1,
+          size: 2 + Math.random()*2,
+        });
+      }
+    }
+
+    gunShotActive = true;
+    gunShotFrame = 0;
+  }
+
+  // Monsters movement remains mostly same (adjust if needed)
+  function moveMonsters() {
+    for (let m of monsters) {
+      let dx = player.gridX - m.x;
+      let dy = player.gridY - m.y;
+      const dist = Math.abs(dx) + Math.abs(dy);
+
+      if (dist === 1) {
         player.lives--;
-        if (player.lives <= 0) {
-          gameState = 'lost';
+        if (player.lives <= 0) gameState = 'lost';
+        continue;
+      }
+
+      if (dist > 1) {
+        if (Math.abs(dx) > Math.abs(dy)) {
+          if (dx > 0 && canMove(m.x + 1, m.y)) m.x++;
+          else if (dx < 0 && canMove(m.x - 1, m.y)) m.x--;
+          else if (dy > 0 && canMove(m.x, m.y + 1)) m.y++;
+          else if (dy < 0 && canMove(m.x, m.y - 1)) m.y--;
+        } else {
+          if (dy > 0 && canMove(m.x, m.y + 1)) m.y++;
+          else if (dy < 0 && canMove(m.x, m.y - 1)) m.y--;
+          else if (dx > 0 && canMove(m.x + 1, m.y)) m.x++;
+          else if (dx < 0 && canMove(m.x - 1, m.y)) m.x--;
         }
       }
     }
   }
 
-  function drawLives() {
-    ctx.fillStyle = "white";
-    ctx.font = "16px Arial";
-    ctx.fillText("Lives: " + player.lives, 10, 20);
-  }
-
-  function updatePlayer() {
-    if (!player.moving) return;
-
-    let dx = player.targetX - player.x;
-    let dy = player.targetY - player.y;
-    let dist = Math.sqrt(dx * dx + dy * dy);
-
-    if (dist < player.speed) {
-      player.x = player.targetX;
-      player.y = player.targetY;
-      player.moving = false;
-    } else {
-      player.x += (dx / dist) * player.speed;
-      player.y += (dy / dist) * player.speed;
-    }
-  }
-
+  // Particle update and draw remains the same
   function updateParticles() {
     for (let i = particles.length - 1; i >= 0; i--) {
       let p = particles[i];
       p.x += p.vx;
       p.y += p.vy;
-      p.alpha -= 0.04;
-      if (p.alpha <= 0) particles.splice(i, 1);
+      p.alpha -= 0.03;
+      if (p.alpha <= 0) {
+        particles.splice(i, 1);
+      }
     }
   }
 
   function drawParticles() {
     for (let p of particles) {
-      ctx.fillStyle = `rgba(255, 255, 255, ${p.alpha.toFixed(2)})`;
+      ctx.fillStyle = `rgba(255, 165, 0, ${p.alpha})`; // orange color
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  function gameLoop(timestamp) {
+  // --- MAIN LOOP ---
+
+  function gameLoop() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     if (gameState === 'title') {
-      drawTitle();
+      ctx.fillStyle = "white";
+      ctx.font = "40px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("Trapped", canvas.width / 2, canvas.height / 3);
+      ctx.font = "20px Arial";
+      ctx.fillText("WASD to move", canvas.width / 2, canvas.height / 2);
+      ctx.fillText("L = Sword attack", canvas.width / 2, canvas.height / 2 + 30);
+      ctx.fillText("K = Gun shoot (3 ammo, max 15)", canvas.width / 2, canvas.height / 2 + 60);
+      ctx.fillText("Collect keys to unlock exit!", canvas.width / 2, canvas.height / 2 + 90);
+      ctx.fillText("Press Enter to start", canvas.width / 2, canvas.height / 2 + 120);
     } else if (gameState === 'playing') {
-      updatePlayer();
-
-      if (attackActive) {
-        attackFrame++;
-        if (attackFrame > attackDuration) {
-          attackActive = false;
-        }
-      }
-
       drawMaze();
+      drawAmmoPacks();
+      drawKeys();
       drawMonsters();
       drawPlayer();
       drawAttack();
+      drawGunShot();
       drawParticles();
-      drawLives();
+      drawLivesAndAmmo();
 
+      updatePlayer();
       updateParticles();
 
-      if (timestamp - monsterTimer > 1000) {
-        moveMonsters();
-        monsterTimer = timestamp;
+      if (!attackActive && !gunShotActive) {
+        monsterTimer++;
+        if (monsterTimer >= 30) { // monsters move every ~0.5 seconds (assuming 60fps)
+          moveMonsters();
+          monsterTimer = 0;
+        }
+      } else {
+        if (attackActive) {
+          attackFrame++;
+          if (attackFrame > attackDuration) attackActive = false;
+        }
+        if (gunShotActive) {
+          gunShotFrame++;
+          if (gunShotFrame > gunShotDuration) gunShotActive = false;
+        }
       }
     } else if (gameState === 'won') {
-      drawEnd("You Escaped!");
+      ctx.fillStyle = 'green';
+      ctx.font = '40px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText("You escaped!", canvas.width / 2, canvas.height / 2);
+      ctx.font = '20px Arial';
+      ctx.fillText("Press Enter to restart", canvas.width / 2, canvas.height / 2 + 40);
     } else if (gameState === 'lost') {
-      drawEnd("You Died!");
+      ctx.fillStyle = 'red';
+      ctx.font = '40px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText("Game Over", canvas.width / 2, canvas.height / 2);
+      ctx.font = '20px Arial';
+      ctx.fillText("Press Enter to restart", canvas.width / 2, canvas.height / 2 + 40);
     }
 
     requestAnimationFrame(gameLoop);
   }
 
-  document.addEventListener("keydown", (e) => {
+  // --- INPUT HANDLERS ---
+
+  document.addEventListener('keydown', (e) => {
     if (gameState === 'title' && e.key === 'Enter') {
       initGame();
     }
+    if (gameState === 'won' || gameState === 'lost') {
+      if (e.key === 'Enter') initGame();
+    }
+    if (gameState !== 'playing') return;
 
-    if (gameState === 'playing') {
-      if (e.key === 'w') requestMove(0, -1);
-      if (e.key === 's') requestMove(0, 1);
-      if (e.key === 'a') requestMove(-1, 0);
-      if (e.key === 'd') requestMove(1, 0);
-      if (e.key.toLowerCase() === 'l') attack();
+    switch (e.key.toLowerCase()) {
+      case 'w': requestMove(0, -1); break;
+      case 'a': requestMove(-1, 0); break;
+      case 's': requestMove(0, 1); break;
+      case 'd': requestMove(1, 0); break;
+      case 'l': swordAttack(); break;
+      case 'k': gunAttack(); break;
     }
   });
 
-  requestAnimationFrame(gameLoop);
+  gameLoop();
 </script>
 </body>
 
